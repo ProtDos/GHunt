@@ -51,26 +51,19 @@ async def get_reviews(as_client: httpx.AsyncClient, gaia_id: str) -> Tuple[str, 
     agg_reviews = []
     agg_photos = []
 
-    print(f"[stats] getting statistics for gaia_id={gaia_id}")
     req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb']['stats'].format(gaia_id)}")
-    print(f"[stats] status={req.status_code} body_len={len(req.text)}")
     if req.status_code == 302 and req.headers["Location"].startswith("https://www.google.com/sorry/index"):
-        print("[stats] hit Google 'sorry' page — failed")
         return "failed", stats, [], []
 
     data = json.loads(req.text[5:])
     if len(data) < 17 or not data[16] or not data[16][8]:
-        print("[stats] data[16][8] missing — empty profile")
         return "empty", stats, [], []
     stats = {sec[6]: sec[7] for sec in data[16][8][0]}
-    print(f"[stats] parsed stats = {stats}")
 
     review_count = stats.get("Reviews", 0) + stats.get("Ratings", 0)
     photo_count = stats.get("Photos", 0)
     total = review_count + photo_count
-    print(f"[stats] reviews+ratings={review_count} photos={photo_count} total={total}")
     if total == 0:
-        print("[stats] nothing to fetch — empty")
         return "empty", stats, [], []
 
     # Build the list of categories we actually need to fetch.
@@ -82,20 +75,16 @@ async def get_reviews(as_client: httpx.AsyncClient, gaia_id: str) -> Tuple[str, 
         categories.append("photos")
 
     for category in categories:
-        print(f"\n[{category}] === starting category ===")
         first = True
         next_page_token = ""
         page = 0
         while True:
             page += 1
             if first:
-                print(f"[{category}] fetching page {page} (first)")
                 req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb'][category]['first'].format(gaia_id)}")
                 first = False
             else:
-                print(f"[{category}] fetching page {page} (token={next_page_token[:30]!r}...)")
                 req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb'][category]['page'].format(gaia_id, next_page_token)}")
-            print(f"[{category}] status={req.status_code} body_len={len(req.text)}")
             data = json.loads(req.text[5:])
 
             new_reviews = []
@@ -106,13 +95,10 @@ async def get_reviews(as_client: httpx.AsyncClient, gaia_id: str) -> Tuple[str, 
                 # Only treat missing data[45] as "private" when stats said there should be content.
                 # (Now guaranteed by the count gate above.)
                 if len(data) < 46 or not data[45]:
-                    print(f"[{category}] data[45] missing despite count={review_count} — private profile")
                     return "private", stats, [], []
                 reviews_data = data[45][0]
                 if not reviews_data:
-                    print(f"[{category}] no review entries on this page — stopping")
                     break
-                print(f"[{category}] {len(reviews_data)} entries on this page")
                 for i, review_data in enumerate(reviews_data):
                     review = MapsReview()
                     review.id = review_data[2][0]
@@ -129,27 +115,21 @@ async def get_reviews(as_client: httpx.AsyncClient, gaia_id: str) -> Tuple[str, 
                     if review_data[4][0]:
                         review.location.position.latitude = review_data[4][0][2]
                         review.location.position.longitude = review_data[4][0][3]
-                    print(f"[{category}]   [{i}] id={review.id} rating={review.rating} loc={review.location.name!r} date={review.date}")
                     new_reviews.append(review)
 
                 agg_reviews += new_reviews
-                print(f"[{category}] running total = {len(agg_reviews)}")
 
                 if not new_reviews or len(data[45]) < 2 or not data[45][1]:
-                    print(f"[{category}] no next-page token — stopping")
                     break
                 next_page_token = data[45][1].strip("=")
 
             # Photos
             elif category == "photos":
                 if len(data) < 23 or not data[22]:
-                    print(f"[{category}] data[22] missing despite count={photo_count} — private profile")
                     return "private", stats, [], []
                 photos_data = data[22][1] if len(data[22]) > 1 else None
                 if not photos_data:
-                    print(f"[{category}] no photo entries on this page — stopping")
                     break
-                print(f"[{category}] {len(photos_data)} entries on this page")
                 for i, photo_data in enumerate(photos_data):
                     photos = MapsPhoto()
                     photos.id = photo_data[0][10]
@@ -168,18 +148,14 @@ async def get_reviews(as_client: httpx.AsyncClient, gaia_id: str) -> Tuple[str, 
                             photos.location.position.longitude = photo_data[1][0][3]
                         if len(photo_data[1]) > 31 and photo_data[1][31]:
                             photos.location.cost_level = len(photo_data[1][31])
-                    print(f"[{category}]   [{i}] id={photos.id} loc={photos.location.name!r} date={photos.date}")
                     new_photos.append(photos)
 
                 agg_photos += new_photos
-                print(f"[{category}] running total = {len(agg_photos)}")
 
                 if not new_photos or len(data[22]) < 4 or not data[22][3]:
-                    print(f"[{category}] no next-page token — stopping")
                     break
                 next_page_token = data[22][3].strip("=")
 
-    print(f"\n[done] reviews={len(agg_reviews)} photos={len(agg_photos)}")
     return "", stats, agg_reviews, agg_photos
 
 def avg_location(locs: Tuple[float, float]):
