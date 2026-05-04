@@ -92,6 +92,13 @@ class Position(SmartObj):
         self.latitude: float = 0.0
         self.longitude: float = 0.0
 
+    def to_json(self):
+        return {
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+        }
+
+
 class MapsLocation(SmartObj):
     def __init__(self):
         self.id: str = ""
@@ -100,7 +107,19 @@ class MapsLocation(SmartObj):
         self.position: Position = Position()
         self.tags: List[str] = []
         self.types: List[str] = []
-        self.cost_level: int = 0 # 1-4
+        self.cost_level: int = 0  # 1-4
+
+    def to_json(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "address": self.address,
+            "position": self.position.to_json() if self.position else None,
+            "tags": list(self.tags),
+            "types": list(self.types),
+            "cost_level": self.cost_level,
+        }
+
 
 class MapsReview(SmartObj):
     def __init__(self):
@@ -110,6 +129,16 @@ class MapsReview(SmartObj):
         self.location: MapsLocation = MapsLocation()
         self.date: datetime = None
 
+    def to_json(self):
+        return {
+            "id": self.id,
+            "comment": self.comment,
+            "rating": self.rating,
+            "location": self.location.to_json() if self.location else None,
+            "date": self.date.isoformat() if self.date else None,
+        }
+
+
 class MapsPhoto(SmartObj):
     def __init__(self):
         self.id: str = ""
@@ -117,7 +146,15 @@ class MapsPhoto(SmartObj):
         self.location: MapsLocation = MapsLocation()
         self.date: datetime = None
 
-### Drive
+    def to_json(self):
+        return {
+            "id": self.id,
+            "url": self.url,
+            "location": self.location.to_json() if self.location else None,
+            "date": self.date.isoformat() if self.date else None,
+        }
+
+
 class DriveExtractedUser(SmartObj):
     def __init__(self):
         self.gaia_id: str = ""
@@ -125,3 +162,12 @@ class DriveExtractedUser(SmartObj):
         self.email_address: str = ""
         self.role: str = ""
         self.is_last_modifying_user: bool = False
+
+    def to_json(self):
+        return {
+            "gaia_id": self.gaia_id,
+            "name": self.name,
+            "email_address": self.email_address,
+            "role": self.role,
+            "is_last_modifying_user": self.is_last_modifying_user,
+        }
