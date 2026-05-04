@@ -16,9 +16,16 @@ class PersonGplusExtendedData(Parser):
 
     def _scrape(self, gplus_data):
         self.contentRestriction = gplus_data.get("contentRestriction")
-        
+
         if (isEnterpriseUser := gplus_data.get("isEnterpriseUser")):
             self.isEntrepriseUser = isEnterpriseUser
+
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "contentRestriction": self.contentRestriction,
+            "isEntrepriseUser": self.isEntrepriseUser,
+        }
+
 
 class PersonDynamiteExtendedData(Parser):
     def __init__(self):
@@ -35,6 +42,15 @@ class PersonDynamiteExtendedData(Parser):
             get("customerId", {}).get("customerId")):
             self.customerId = customerId
 
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "presence": self.presence,
+            "entityType": self.entityType,
+            "dndState": self.dndState,
+            "customerId": self.customerId,
+        }
+
+
 class PersonExtendedData(Parser):
     def __init__(self):
          self.dynamiteData: PersonDynamiteExtendedData = PersonDynamiteExtendedData()
@@ -47,6 +63,13 @@ class PersonExtendedData(Parser):
         if (gplus_data := extended_data.get("gplusExtendedData")):
             self.gplusData._scrape(gplus_data)
 
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "dynamiteData": self.dynamiteData.to_json(),
+            "gplusData": self.gplusData.to_json(),
+        }
+
+
 class PersonPhoto(Parser):
     def __init__(self):
         self.url: str = ""
@@ -58,7 +81,7 @@ class PersonPhoto(Parser):
             self.url = photo_data.get("url")
 
             self.isDefault, self.flathash = await is_default_profile_pic(as_client, self.url)
-            
+
         elif photo_type == "cover_photo":
             self.url = '='.join(photo_data.get("imageUrl").split("=")[:-1])
             if (isDefault := photo_data.get("isDefault")):
@@ -66,12 +89,26 @@ class PersonPhoto(Parser):
         else:
             raise GHuntAPIResponseParsingError(f'The provided photo type "{photo_type}" weren\'t recognized.')
 
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "url": self.url,
+            "isDefault": self.isDefault,
+            "flathash": str(self.flathash) if self.flathash is not None else None,
+        }
+
+
 class PersonEmail(Parser):
     def __init__(self):
         self.value: str = ""
-    
+
     def _scrape(self, email_data: Dict[str, any]):
         self.value = email_data.get("value")
+
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "value": self.value,
+        }
+
 
 class PersonName(Parser):
     def __init__(self):
@@ -85,6 +122,14 @@ class PersonName(Parser):
         # self.lastName = unicode_patch(x) if (x := name_data.get("familyName")) else None
         pass # Google patched the names :/ very sad
 
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "fullname": self.fullname,
+            "firstName": self.firstName,
+            "lastName": self.lastName,
+        }
+
+
 class PersonProfileInfo(Parser):
     def __init__(self):
         self.userTypes: List[str] = []
@@ -93,6 +138,12 @@ class PersonProfileInfo(Parser):
         if "ownerUserType" in profile_data:
             self.userTypes += profile_data.get("ownerUserType")
 
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "userTypes": self.userTypes,
+        }
+
+
 class PersonSourceIds(Parser):
     def __init__(self):
         self.lastUpdated: datetime = None
@@ -100,6 +151,12 @@ class PersonSourceIds(Parser):
     def _scrape(self, source_ids_data: Dict[str, any]):
         if (timestamp := source_ids_data.get("lastUpdatedMicros")):
             self.lastUpdated = datetime.utcfromtimestamp(float(timestamp[:10]))
+
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "lastUpdated": self.lastUpdated.isoformat() if self.lastUpdated else None,
+        }
+
 
 class PersonInAppReachability(Parser):
     def __init__(self):
@@ -110,8 +167,15 @@ class PersonInAppReachability(Parser):
             if app["metadata"]["container"] == container_name:
                 self.apps.append(app["appType"].title())
 
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "apps": self.apps,
+        }
+
+
 class PersonContainers(dict):
     pass
+
 
 class Person(Parser):
     def __init__(self):
@@ -124,6 +188,19 @@ class Person(Parser):
         self.coverPhotos: Dict[str, PersonPhoto] = PersonContainers()
         self.inAppReachability: Dict[str, PersonInAppReachability] = PersonContainers()
         self.extendedData: PersonExtendedData = PersonExtendedData()
+
+    def to_json(self) -> Dict[str, any]:
+        return {
+            "personId": self.personId,
+            "sourceIds": {k: v.to_json() for k, v in self.sourceIds.items()},
+            "emails": {k: v.to_json() for k, v in self.emails.items()},
+            "names": {k: v.to_json() for k, v in self.names.items()},
+            "profileInfos": {k: v.to_json() for k, v in self.profileInfos.items()},
+            "profilePhotos": {k: v.to_json() for k, v in self.profilePhotos.items()},
+            "coverPhotos": {k: v.to_json() for k, v in self.coverPhotos.items()},
+            "inAppReachability": {k: v.to_json() for k, v in self.inAppReachability.items()},
+            "extendedData": self.extendedData.to_json(),
+        }
 
     async def _scrape(self, as_client: httpx.AsyncClient, person_data: Dict[str, any]):
         self.personId = person_data.get("personId")
