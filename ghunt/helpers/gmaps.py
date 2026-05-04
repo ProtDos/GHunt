@@ -52,7 +52,7 @@ async def get_reviews(as_client: httpx.AsyncClient, gaia_id: str) -> Tuple[str, 
     agg_photos = []
 
     req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb']['stats'].format(gaia_id)}")
-    if req.status_code == 302 and req.headers["Location"].startswith("https://www.google.com/sorry/index"):
+    if req.status_code == 302 and req.headers["Location"].startswith("https://www.google.com/sorry/index") or "This page appears when Google automatically detects requests coming from your computer" in req.text:
         return "failed", stats, [], []
 
     data = json.loads(req.text[5:])
