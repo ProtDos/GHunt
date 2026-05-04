@@ -45,113 +45,142 @@ def get_datetime(datepublished: str):
 
     return (datetime.today() - delta).replace(microsecond=0, second=0)
 
-async def get_reviews(as_client: httpx.AsyncClient, gaia_id: str) -> Tuple[str, Dict[str, int]]:
+async def get_reviews(as_client: httpx.AsyncClient, gaia_id: str) -> Tuple[str, Dict[str, int], List, List]:
     """Extracts the target's statistics, reviews and photos."""
     stats = {}
+    agg_reviews = []
+    agg_photos = []
 
-    print("Getting statistics")
+    print(f"[stats] getting statistics for gaia_id={gaia_id}")
     req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb']['stats'].format(gaia_id)}")
+    print(f"[stats] status={req.status_code} body_len={len(req.text)}")
     if req.status_code == 302 and req.headers["Location"].startswith("https://www.google.com/sorry/index"):
-        return "failed", stats
+        print("[stats] hit Google 'sorry' page — failed")
+        return "failed", stats, [], []
 
     data = json.loads(req.text[5:])
-    if not data[16][8]:
-        return "empty", stats
-    stats = {sec[6]:sec[7] for sec in data[16][8][0]}
-    total_reviews = stats["Reviews"] + stats["Ratings"] + stats["Photos"]
-    if not total_reviews:
-        return "empty", stats
+    if len(data) < 17 or not data[16] or not data[16][8]:
+        print("[stats] data[16][8] missing — empty profile")
+        return "empty", stats, [], []
+    stats = {sec[6]: sec[7] for sec in data[16][8][0]}
+    print(f"[stats] parsed stats = {stats}")
 
-    # # with alive_bar(total_reviews, receipt=False) as bar:
-    # for category in ["reviews", "photos"]:
-    #     first = True
-    #     while True:
-    #         if first:
-    #             print(f"Getting {category} (first)")
-    #             req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb'][category]['first'].format(gaia_id)}")
-    #             first = False
-    #         else:
-    #             print(f"Getting {category} (next)")
-    #             req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb'][category]['page'].format(gaia_id, next_page_token)}")
-    #         data = json.loads(req.text[5:])
+    review_count = stats.get("Reviews", 0) + stats.get("Ratings", 0)
+    photo_count = stats.get("Photos", 0)
+    total = review_count + photo_count
+    print(f"[stats] reviews+ratings={review_count} photos={photo_count} total={total}")
+    if total == 0:
+        print("[stats] nothing to fetch — empty")
+        return "empty", stats, [], []
 
-    #         new_reviews = []
-    #         new_photos = []
-    #         next_page_token = ""
+    # Build the list of categories we actually need to fetch.
+    # Skipping a category when its count is 0 avoids a false "private" return.
+    categories = []
+    if review_count > 0:
+        categories.append("reviews")
+    if photo_count > 0:
+        categories.append("photos")
 
-    #         # Reviews
-    #         if category == "reviews":
-    #             if not data[45]:
-    #                 return "private", stats, [], []
-    #             reviews_data = data[45][0]
-    #             if not reviews_data:
-    #                 break
-    #             for review_data in reviews_data:
-    #                 review = MapsReview()
-    #                 # from pprint import pprint; import pdb; pdb.set_trace()
-    #                 review.id = review_data[2][0]
-    #                 review.date = datetime.utcfromtimestamp(review_data[2][1][3] / 1000000)
-    #                 if len(review_data[2][2]) > 15 and review_data[2][2][15]:
-    #                     review.comment = review_data[2][2][15][0][0]
-    #                 review.rating = review_data[2][2][0][0]
+    for category in categories:
+        print(f"\n[{category}] === starting category ===")
+        first = True
+        next_page_token = ""
+        page = 0
+        while True:
+            page += 1
+            if first:
+                print(f"[{category}] fetching page {page} (first)")
+                req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb'][category]['first'].format(gaia_id)}")
+                first = False
+            else:
+                print(f"[{category}] fetching page {page} (token={next_page_token[:30]!r}...)")
+                req = await as_client.get(f"https://www.google.com/locationhistory/preview/mas?authuser=0&hl=en&gl=us&pb={gb.config.templates['gmaps_pb'][category]['page'].format(gaia_id, next_page_token)}")
+            print(f"[{category}] status={req.status_code} body_len={len(req.text)}")
+            data = json.loads(req.text[5:])
 
-    #                 review.location.id = review_data[4][14][0]
-    #                 review.location.name = review_data[4][2]
-    #                 review.location.address = review_data[4][3]
-    #                 review.location.tags = review_data[4][4] if review_data[4][4] else []
-    #                 review.location.types = [x for x in review_data[4][8] if x]
-    #                 if review_data[4][0]:
-    #                     review.location.position.latitude = review_data[4][0][2]
-    #                     review.location.position.longitude = review_data[4][0][3]
-    #                 # if len(review_data[1]) > 31 and review_data[1][31]:
-    #                     # print(f"Cost level : {review_data[1][31]}")
-    #                     # review.location.cost_level = len(review_data[1][31])
-    #                 new_reviews.append(review)
-    #                 # bar()
+            new_reviews = []
+            new_photos = []
 
-    #             agg_reviews += new_reviews
+            # Reviews
+            if category == "reviews":
+                # Only treat missing data[45] as "private" when stats said there should be content.
+                # (Now guaranteed by the count gate above.)
+                if len(data) < 46 or not data[45]:
+                    print(f"[{category}] data[45] missing despite count={review_count} — private profile")
+                    return "private", stats, [], []
+                reviews_data = data[45][0]
+                if not reviews_data:
+                    print(f"[{category}] no review entries on this page — stopping")
+                    break
+                print(f"[{category}] {len(reviews_data)} entries on this page")
+                for i, review_data in enumerate(reviews_data):
+                    review = MapsReview()
+                    review.id = review_data[2][0]
+                    review.date = datetime.utcfromtimestamp(review_data[2][1][3] / 1000000)
+                    if len(review_data[2][2]) > 15 and review_data[2][2][15]:
+                        review.comment = review_data[2][2][15][0][0]
+                    review.rating = review_data[2][2][0][0]
 
-    #             if not new_reviews or len(data[45]) < 2 or not data[45][1]:
-    #                 # from pprint import pprint; import pdb; pdb.set_trace()
-    #                 break
-    #             next_page_token = data[45][1].strip("=")
+                    review.location.id = review_data[4][14][0]
+                    review.location.name = review_data[4][2]
+                    review.location.address = review_data[4][3]
+                    review.location.tags = review_data[4][4] if review_data[4][4] else []
+                    review.location.types = [x for x in review_data[4][8] if x]
+                    if review_data[4][0]:
+                        review.location.position.latitude = review_data[4][0][2]
+                        review.location.position.longitude = review_data[4][0][3]
+                    print(f"[{category}]   [{i}] id={review.id} rating={review.rating} loc={review.location.name!r} date={review.date}")
+                    new_reviews.append(review)
 
-    #         # Photos
-    #         elif category == "photos" :
-    #             if not data[22]:
-    #                 return "private", stats, [], []
-    #             photos_data = data[22][1]
-    #             if not photos_data:
-    #                 break
-    #             for photo_data in photos_data:
-    #                 photos = MapsPhoto()
-    #                 photos.id = photo_data[0][10]
-    #                 photos.url = photo_data[0][6][0].split("=")[0]
-    #                 date = photo_data[0][21][6][8]
-    #                 photos.date = datetime(date[0], date[1], date[2], date[3]) # UTC
-    #                 # photos.approximative_date = get_datetime(date[8][0]) # UTC
+                agg_reviews += new_reviews
+                print(f"[{category}] running total = {len(agg_reviews)}")
 
-    #                 if len(photo_data) > 1:
-    #                     photos.location.id = photo_data[1][14][0]
-    #                     photos.location.name = photo_data[1][2]
-    #                     photos.location.address = photo_data[1][3]
-    #                     photos.location.tags = photo_data[1][4] if photo_data[1][4] else []
-    #                     photos.location.types = [x for x in photo_data[1][8] if x] if photo_data[1][8] else []
-    #                     if photo_data[1][0]:
-    #                         photos.location.position.latitude = photo_data[1][0][2]
-    #                         photos.location.position.longitude = photo_data[1][0][3]
-    #                     if len(photo_data[1]) > 31 and photo_data[1][31]:
-    #                         photos.location.cost_level = len(photo_data[1][31])
-    #                 new_photos.append(photos)
-    #                 # bar()
+                if not new_reviews or len(data[45]) < 2 or not data[45][1]:
+                    print(f"[{category}] no next-page token — stopping")
+                    break
+                next_page_token = data[45][1].strip("=")
 
-    #             agg_photos += new_photos
+            # Photos
+            elif category == "photos":
+                if len(data) < 23 or not data[22]:
+                    print(f"[{category}] data[22] missing despite count={photo_count} — private profile")
+                    return "private", stats, [], []
+                photos_data = data[22][1] if len(data[22]) > 1 else None
+                if not photos_data:
+                    print(f"[{category}] no photo entries on this page — stopping")
+                    break
+                print(f"[{category}] {len(photos_data)} entries on this page")
+                for i, photo_data in enumerate(photos_data):
+                    photos = MapsPhoto()
+                    photos.id = photo_data[0][10]
+                    photos.url = photo_data[0][6][0].split("=")[0]
+                    date = photo_data[0][21][6][8]
+                    photos.date = datetime(date[0], date[1], date[2], date[3])  # UTC
 
-    #             if not new_photos or len(data[22]) < 4 or not data[22][3]:
-    #                 break
-    #             next_page_token = data[22][3].strip("=")
+                    if len(photo_data) > 1:
+                        photos.location.id = photo_data[1][14][0]
+                        photos.location.name = photo_data[1][2]
+                        photos.location.address = photo_data[1][3]
+                        photos.location.tags = photo_data[1][4] if photo_data[1][4] else []
+                        photos.location.types = [x for x in photo_data[1][8] if x] if photo_data[1][8] else []
+                        if photo_data[1][0]:
+                            photos.location.position.latitude = photo_data[1][0][2]
+                            photos.location.position.longitude = photo_data[1][0][3]
+                        if len(photo_data[1]) > 31 and photo_data[1][31]:
+                            photos.location.cost_level = len(photo_data[1][31])
+                    print(f"[{category}]   [{i}] id={photos.id} loc={photos.location.name!r} date={photos.date}")
+                    new_photos.append(photos)
 
-    return "", stats
+                agg_photos += new_photos
+                print(f"[{category}] running total = {len(agg_photos)}")
+
+                if not new_photos or len(data[22]) < 4 or not data[22][3]:
+                    print(f"[{category}] no next-page token — stopping")
+                    break
+                next_page_token = data[22][3].strip("=")
+
+    print(f"\n[done] reviews={len(agg_reviews)} photos={len(agg_photos)}")
+    return "", stats, agg_reviews, agg_photos
 
 def avg_location(locs: Tuple[float, float]):
     """
